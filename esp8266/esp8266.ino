@@ -1,14 +1,48 @@
-// aws
+//////////////////////////////// AWS ////////////////////////////////
 #include <ESP8266WiFi.h>
 #include <MySQL_Connection.h>
 #include <MySQL_Cursor.h>
 
-// time
+// Wi-Fi credentials
+const char* ssid = "HMR - WiFi // 2.4GHz";
+const char* password = "xxx";
+
+// AWS RDS credentials
+IPAddress server_addr(13, 53, 202, 210); 
+int server_port = 3306; 
+char dbuser[] = "admin";
+char dbpassword[] = "xxx";
+char dbname[] = "co_database";
+
+// MySQL connection and cursor objects
+WiFiClient client;
+WiFiClient client_api_time;
+MySQL_Connection conn((Client *)&client);
+MySQL_Cursor cur(&conn);
+
+//////////////////////////////// TIME ////////////////////////////////
 #include <ESP8266HTTPClient.h>
 #include <WiFiClient.h>
 #include <ArduinoJson.h>
 
-// mq9
+//////////////////////////////// BUZZER ////////////////////////////////
+#include <Ticker.h>
+
+const int buzzer_pin = D0;
+int buzz_counter = 3; // Number of buzzes per round
+int buzz_time = 500; // Buzz time in milliseconds
+float buzz_intensity = 0.25; // Buzzer intensity between 0 and 1
+Ticker buzzerTicker;
+
+//////////////////////////////// MQ9 ////////////////////////////////
+#define THRESHOLD 5
+// 70-200 warning, you might wanna check this
+// 200+ DANGER, EVACUATE
+
+#include <vector>
+std::vector<float> co_level_vector;
+#define MAX_VECTOR_SIZE 5
+
 #include <MQUnifiedsensor.h>
 /************************Hardware Related Macros************************************/
 #define         Board                   ("ESP8266")
@@ -24,26 +58,12 @@
 //Declare Sensor
 MQUnifiedsensor MQ9(Board, Voltage_Resolution, ADC_Bit_Resolution, Pin, Type);
 
-// Wi-Fi credentials
-const char* ssid = "HMR - WiFi // 2.4GHz";
-const char* password = "xxx";
-
-// AWS RDS credentials
-IPAddress server_addr(13, 53, 202, 210); 
-int server_port = 3306; 
-char dbuser[] = "admin";
-char dbpassword[] = "xxx"
-char dbname[] = "co_database";
-
-// MySQL connection and cursor objects
-WiFiClient client;
-WiFiClient client_api_time;
-MySQL_Connection conn((Client *)&client);
-MySQL_Cursor cur(&conn);
-
+//////////////////////////////// SETUP ////////////////////////////////
 void setup() {
   Serial.begin(9600);
   delay(10);
+
+  pinMode(buzzer_pin, OUTPUT);
 
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
@@ -114,10 +134,7 @@ void setup() {
   MQ9.serialDebug(true);
 }
 
-#define THRESHOLD 70
-// 70-200 warning, you might wanna check this
-// 200+ DANGER, EVACUATE
-
+//////////////////////////////// LOOP ////////////////////////////////
 void loop() {
   // init
   digitalWrite(PreaheatControlPin5, LOW);
@@ -137,7 +154,50 @@ void loop() {
   // send data
   send_data_to_database(co_level, date_time_char, dangerous);
 
+  add_co_level_to_vector(co_level);
+  if(dangerous){
+    if(co_level_vector.size() == MAX_VECTOR_SIZE)
+      check_co_level_readings();
+  }
+
   delay(5000);
+}
+
+void check_co_level_readings(){
+  float min_reading = co_level_vector[0];
+  for(int i=1; i<co_level_vector.size(); i++)
+    if(co_level_vector[i] < min_reading)
+      min_reading = co_level_vector[i];
+
+  if(min_reading >= THRESHOLD && min_reading < (THRESHOLD + 100)){
+    buzz_intensity = 0.25; 
+    buzz();
+  }
+  else if(min_reading >= (THRESHOLD + 100)){
+    buzz_intensity = 1; 
+    buzz();
+    delay(2000);
+    buzz();
+  }
+}
+
+void add_co_level_to_vector(float co_level){
+    if(co_level_vector.size() < MAX_VECTOR_SIZE){
+      co_level_vector.push_back(co_level);
+    }
+    else{
+      co_level_vector.erase(co_level_vector.begin());
+      co_level_vector.push_back(co_level);
+    }
+}
+
+void buzz() {
+  for (int i = 0; i < buzz_counter; i++) {
+    analogWrite(buzzer_pin, buzz_intensity * 255); // Set buzzer intensity (PWM)
+    delay(buzz_time);
+    analogWrite(buzzer_pin, 0); // Turn off buzzer
+    delay(buzz_time);
+  }
 }
 
 float get_current_co_level(){
